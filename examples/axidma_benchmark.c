@@ -53,7 +53,7 @@
 #define DEFAULT_TRANSFER_SIZE       ((int)(IMAGE_SIZE * sizeof(int)))
 
 // The default number of transfers to benchmark
-#define DEFAULT_NUM_TRANSFERS       1000
+#define DEFAULT_NUM_TRANSFERS       100
 
 // The pattern that we fill into the buffers
 #define TEST_PATTERN(i) ((int)(0x1234ACDE ^ (i)))
