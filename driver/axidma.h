@@ -68,6 +68,13 @@ struct axidma_device {
     struct axidma_chan *channels;   // All available channels
     struct list_head dmabuf_list;   // List of allocated DMA buffers
     struct list_head external_dmabufs;  // Buffers allocated in other drivers
+
+    void *reserved_vaddr;           // Kernel virtual address
+    phys_addr_t reserved_paddr;     // Physical address
+    size_t reserved_size;           // Size from DT
+
+    size_t reserved_offset;         /* <--- Add this to track allocation pointer */
+    
 };
 
 /*----------------------------------------------------------------------------
@@ -126,6 +133,8 @@ dma_addr_t axidma_uservirt_to_dma(struct axidma_device *dev, void *user_addr,
 // Function Prototypes
 int axidma_of_num_channels(struct platform_device *pdev);
 int axidma_of_parse_dma_nodes(struct platform_device *pdev,
-                              struct axidma_device *dev);
+                            struct axidma_device *dev);
+int axidma_of_parse_reserved_mem(struct platform_device *pdev, 
+                            struct axidma_device *axidma_dev);
 
 #endif /* AXIDMA_H_ */

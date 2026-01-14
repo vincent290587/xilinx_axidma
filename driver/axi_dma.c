@@ -19,6 +19,7 @@
 #include <linux/of_device.h>
 #include <linux/of_address.h>
 #include <linux/platform_device.h>  // Platform device definitions
+#include <linux/of_reserved_mem.h>
 
 // Local dependencies
 #include "axidma.h"                 // Internal definitions
@@ -51,6 +52,13 @@ static int axidma_probe(struct platform_device *pdev)
         return -ENOMEM;
     }
     axidma_dev->pdev = pdev;
+
+    // Get our private DMA memory
+    rc = axidma_of_parse_reserved_mem(pdev, axidma_dev);
+    if (rc) {
+        axidma_err("Unable to use private memory \n");
+        return -ENOMEM;
+    }
 
     // Initialize the DMA interface
     rc = axidma_dma_init(pdev, axidma_dev);
@@ -112,6 +120,11 @@ static void axidma_remove(struct platform_device *pdev)
 
     // Cleanup the DMA structures
     axidma_dma_exit(axidma_dev);
+    
+    // Unmap the reserved region
+    if (axidma_dev->reserved_vaddr) {
+        memunmap(axidma_dev->reserved_vaddr);
+    }
 
     // Free the device structure
     if (axidma_dev->chrdev_index > 0)

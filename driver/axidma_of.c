@@ -12,6 +12,8 @@
 
 // Kernel Dependencies
 #include <linux/of.h>               // Device tree parsing functions
+#include <linux/of_address.h>
+#include <linux/of_reserved_mem.h>
 #include <linux/platform_device.h>  // Platform device definitions
 
 // Local Dependencies
@@ -154,6 +156,53 @@ static int axidma_check_unique_ids(struct axidma_device *dev)
 /*----------------------------------------------------------------------------
  * Public Interface
  *----------------------------------------------------------------------------*/
+
+int axidma_of_parse_reserved_mem(struct platform_device *pdev, struct axidma_device *axidma_dev) 
+{
+    struct device_node *np;
+    struct resource r;
+    int rc;
+
+    /* 1. Get the phandle for the "memory-region" property */
+    np = of_parse_phandle(pdev->dev.of_node, "memory-region", 0);
+    if (!np) {
+        dev_err(&pdev->dev, "No 'memory-region' property found in DT node\n");
+        return -ENODEV;
+    }
+
+    /* 2. Convert the device node to a resource (gets the physical address and size) */
+    rc = of_address_to_resource(np, 0, &r);
+    if (rc) {
+        dev_err(&pdev->dev, "Failed to get resource from reserved memory node\n");
+        of_node_put(np); // Release phandle reference
+        return rc;
+    }
+
+    /* 3. Store physical address and size in your device structure */
+    axidma_dev->reserved_paddr = r.start;
+    axidma_dev->reserved_size = resource_size(&r) >> 1;
+    axidma_dev->reserved_offset = 0;
+
+    /* 4. Map the physical memory into kernel virtual space 
+     * Since the DT has 'no-map', this memory is no longer managed by 
+     * the kernel's RAM subsystem. We must map it as IO memory.
+     * ioremap_wc (Write-Combined) is ideal for DMA buffers as it 
+     * provides better performance than strictly uncached memory.
+     */
+    axidma_dev->reserved_vaddr = ioremap_wc(r.start, axidma_dev->reserved_size);
+    
+    if (!axidma_dev->reserved_vaddr) {
+        dev_err(&pdev->dev, "ioremap_wc failed for physical address 0x%0llX, Size %zu\n", (u64)r.start, axidma_dev->reserved_size);
+        return -ENOMEM;
+    }
+
+    dev_info(&pdev->dev, "Linked reserved memory: Paddr 0x%0llX, Vaddr %p, Size %zu\n", 
+             (u64)axidma_dev->reserved_paddr, axidma_dev->reserved_vaddr, axidma_dev->reserved_size);
+
+    /* Release the node reference */
+    of_node_put(np);
+    return 0;
+}
 
 int axidma_of_num_channels(struct platform_device *pdev)
 {

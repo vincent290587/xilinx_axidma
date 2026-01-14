@@ -52,10 +52,27 @@ For the Xilinx AXI DMA/VDMA device tree nodes, the only requirement is that the 
 
 Here is a simple example of the device tree nodes for a system with a single AXI DMA IP, with both a transmit and receive channel. Note you will need to adjust this for your kernel tree and setup:
 ```
-axidma_chrdev: axidma_chrdev@0 {
-    compatible = "xlnx,axidma-chrdev";
-    dmas = <&axi_dma_0 0 &axi_dma_0 1>;
-    dma-names = "tx_channel", "rx_channel";
+{
+   reserved-memory {
+    #address-cells = <1>;
+    #size-cells = <1>;
+    ranges;
+    
+    /* 128 MB */
+    dma_src_reserved: buffer@30000000 {
+        compatible = "shared-dma-pool";
+        no-map;
+        reg = <0x30000000 0x08000000>;
+    };
+ 
+     
+    axidma_chrdev: axidma_chrdev@0 {
+        compatible = "xlnx,axidma-chrdev";
+        dmas = <&axi_dma_0 0 &axi_dma_0 1>;
+        dma-names = "tx_channel", "rx_channel";
+        memoory-region = <&dma_src_reserved>;
+    };
+  };
 };
 
 axi_dma_0: axidma0@40400000 {

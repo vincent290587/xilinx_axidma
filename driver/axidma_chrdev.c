@@ -24,6 +24,7 @@
 #include <linux/slab.h>         // Kernel allocation functions
 #include <linux/errno.h>        // Linux error codes
 #include <linux/of_device.h>    // Device tree device related functions
+#include <linux/of_reserved_mem.h>
 
 #include <linux/dma-buf.h>      // DMA shared buffers interface
 #include <linux/scatterlist.h>  // Scatter-gather table definitions
@@ -207,18 +208,13 @@ static int axidma_put_external(struct axidma_device *dev, void *user_addr)
 
 static void axidma_vma_close(struct vm_area_struct *vma)
 {
-    struct axidma_dma_allocation *dma_alloc;
+    struct axidma_dma_allocation *dma_alloc = vma->vm_private_data;
 
-    // Get the AXI DMA allocation data and free the DMA buffer
-    dma_alloc = vma->vm_private_data;
-    dma_free_coherent(dma_alloc->device, dma_alloc->size, dma_alloc->kern_addr,
-                      dma_alloc->dma_addr);
-
-    // Remove the allocation from the list, and free the structure
-    list_del(&dma_alloc->list);
-    kfree(dma_alloc);
-
-    return;
+    if (dma_alloc) {
+        axidma_info("Unmapping DMA buffer at %p\n", dma_alloc->user_addr);
+        list_del(&dma_alloc->list);
+        kfree(dma_alloc);
+    }
 }
 
 // The VMA operations for the AXI DMA device
@@ -248,10 +244,174 @@ static int axidma_open(struct inode *inode, struct file *file)
 
 static int axidma_release(struct inode *inode, struct file *file)
 {
+    struct axidma_device *dev = file->private_data;
+    /* If no one else is using the device, reset the pool */
+    if (list_empty(&dev->dmabuf_list)) {
+        dev->reserved_offset = 0;
+        axidma_info("Reserved memory pool reset to zero.\n");
+    }
     file->private_data = NULL;
     return 0;
 }
 
+#if 0
+static int axidma_mmap(struct file *file, struct vm_area_struct *vma)
+{
+    int rc;
+    struct axidma_device *dev;
+    struct axidma_dma_allocation *dma_alloc;
+    struct device *hw_dev;
+
+    dev = file->private_data;
+
+    /* CRITICAL FIX: The allocation must be performed on the actual DMA hardware
+     * device that has the 'memory-region' property in the DT. In most 
+     * implementations of this driver, dev->device is the hardware node. */
+    hw_dev = dev->device; 
+
+    dma_alloc = kmalloc(sizeof(*dma_alloc), GFP_KERNEL);
+    if (!dma_alloc) {
+        axidma_err("Unable to allocate VMA data structure.\n");
+        return -ENOMEM;
+    }
+
+    dma_alloc->size = vma->vm_end - vma->vm_start;
+    dma_alloc->user_addr = (void *)vma->vm_start;
+    dma_alloc->device = hw_dev;
+
+    /* Ensure the hardware device is configured for DMA before allocation.
+     * This forces the kernel to look at the 'memory-region' and 'dma-ranges'
+     * inside the Device Tree node. */
+    if (hw_dev->of_node) {
+        of_dma_configure(hw_dev, hw_dev->of_node, true);
+    }
+
+    /* Allocate from the reserved pool. Since hw_dev is linked to the 
+     * 'dma_reserved_mem' region in your DT, this call will pull from that 
+     * specific physical range (e.g., 0x70000000). */
+    dma_alloc->kern_addr = dma_alloc_coherent(hw_dev, dma_alloc->size,
+                                             &dma_alloc->dma_addr, GFP_KERNEL);
+    
+    if (dma_alloc->kern_addr == NULL) {
+        axidma_err("Failed to allocate %zu bytes from reserved DMA pool.\n", dma_alloc->size);
+        rc = -ENOMEM;
+        goto free_vma_data;
+    }
+
+    // CRITICAL TRACE: Verify the physical address range
+    // %pad is the standard kernel format for dma_addr_t
+    axidma_err("SUCCESS: Allocated DMA Region\n");
+    axidma_err("  -> Userspace Virt: %p\n", dma_alloc->user_addr);
+    axidma_err("  -> Kernel Virt:    %p\n", dma_alloc->kern_addr);
+    axidma_err("  -> Physical (DMA): %pad\n", &dma_alloc->dma_addr);
+
+    /* Set VMA flags for DMA: non-cached, shared, and don't expand. */
+    vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
+    
+    /* Map the allocated coherent memory into userspace. */
+    rc = dma_mmap_coherent(hw_dev, vma, dma_alloc->kern_addr,
+                           dma_alloc->dma_addr, dma_alloc->size);
+    if (rc < 0) {
+        axidma_err("dma_mmap_coherent failed for address %p.\n", dma_alloc->kern_addr);
+        goto free_dma_region;
+    }
+
+    vma->vm_ops = &axidma_vm_ops;
+    vma->vm_private_data = dma_alloc;
+
+    /* Add the allocation to the driver's list so axidma_uservirt_to_dma() 
+     * can find the correct physical 'dma_addr' later. */
+    list_add(&dma_alloc->list, &dev->dmabuf_list);
+
+    axidma_info("Mapped UserVirt %p -> PhysDMA %pad (Size: %zu)\n", 
+                dma_alloc->user_addr, &dma_alloc->dma_addr, dma_alloc->size);
+
+    return 0;
+
+free_dma_region:
+    dma_free_coherent(hw_dev, dma_alloc->size, dma_alloc->kern_addr,
+                      dma_alloc->dma_addr);
+free_vma_data:
+    kfree(dma_alloc);
+    return rc;
+}
+#endif
+
+static int axidma_mmap(struct file *file, struct vm_area_struct *vma)
+{
+    struct axidma_device *dev = file->private_data;
+    size_t size = vma->vm_end - vma->vm_start;
+    struct axidma_dma_allocation *dma_alloc;
+    unsigned long pfn;
+    int rc;
+
+    // 1. Safety Check: Ensure the requested size fits in our reserved region
+    // If you plan to support multiple allocations, you'll need an offset tracker.
+    if (size > dev->reserved_size) {
+        axidma_err("Requested mmap size (%zu) exceeds reserved region (%zu)\n", 
+                   size, dev->reserved_size);
+        return -EINVAL;
+    }
+
+    // 1b. Check if we have enough space left
+    if (dev->reserved_offset + size > dev->reserved_size) {
+        axidma_err("Not enough reserved memory left! (Req: %zu, Left: %zu)\n", 
+                   size, dev->reserved_size - dev->reserved_offset);
+        return -ENOMEM;
+    }
+
+    // 2. Prepare the DMA allocation tracking structure
+    // This is vital so that axidma_uservirt_to_dma() can find this buffer later
+    dma_alloc = kmalloc(sizeof(*dma_alloc), GFP_KERNEL);
+    if (!dma_alloc) {
+        return -ENOMEM;
+    }
+
+    // 3. Set up the allocation metadata
+    dma_alloc->kern_addr = dev->reserved_vaddr+ dev->reserved_offset; // The ioremap'd address
+    dma_alloc->dma_addr = dev->reserved_paddr+ dev->reserved_offset;  // The physical address (0x30000000)
+    dma_alloc->user_addr = (void *)vma->vm_start;
+    dma_alloc->size = size;
+    dma_alloc->device = dev->device;
+
+    // 3b. Update the offset for the NEXT mmap call
+    // We use PAGE_ALIGN to ensure the next buffer starts on a fresh page
+    dev->reserved_offset += PAGE_ALIGN(size);
+
+    // 4. Configure Page Protection
+    // Since we used ioremap_wc, we should use the matching pgprot_writecombine
+    // This allows the CPU to use write-combining buffers for better performance
+    vma->vm_page_prot = pgprot_writecombine(vma->vm_page_prot);
+
+    // 5. Map the physical address to userspace
+    // PFN is Physical Page Frame Number (Physical Address >> PAGE_SHIFT)
+    pfn = dma_alloc->dma_addr >> PAGE_SHIFT;
+
+    // remap_pfn_range is the workhorse for mapping non-kernel-managed RAM
+    rc = remap_pfn_range(vma, 
+                         vma->vm_start, 
+                         pfn, 
+                         size, 
+                         vma->vm_page_prot);
+    if (rc < 0) {
+        axidma_err("remap_pfn_range failed: %d\n", rc);
+        kfree(dma_alloc);
+        return rc;
+    }
+
+    // 6. Hook into VMA ops so we can clean up if the user calls munmap
+    vma->vm_ops = &axidma_vm_ops;
+    vma->vm_private_data = dma_alloc;
+
+    // 7. Add to the driver's internal list for address translation
+    list_add(&dma_alloc->list, &dev->dmabuf_list);
+
+    axidma_info("mmap successful: User %p -> Phys %pad (Size %zu)\n", 
+                dma_alloc->user_addr, &dma_alloc->dma_addr, size);
+
+    return 0;
+}
+#if 0
 static int axidma_mmap(struct file *file, struct vm_area_struct *vma)
 {
     int rc;
@@ -265,6 +425,7 @@ static int axidma_mmap(struct file *file, struct vm_area_struct *vma)
     dma_alloc = kmalloc(sizeof(*dma_alloc), GFP_KERNEL);
     if (dma_alloc == NULL) {
         axidma_err("Unable to allocate VMA data structure.");
+        dev_warn(&dev->pdev->dev, "Unable to allocate VMA data structure.");
         rc = -ENOMEM;
         goto ret;
     }
@@ -309,6 +470,13 @@ static int axidma_mmap(struct file *file, struct vm_area_struct *vma)
      * referring to the DMA buffer. */
     //vma->vm_flags |= VM_DONTCOPY;
 
+    // CRITICAL TRACE: Verify the physical address range
+    // %pad is the standard kernel format for dma_addr_t
+    dev_warn(&dev->pdev->dev, "SUCCESS: Allocated DMA Region\n");
+    dev_warn(&dev->pdev->dev, "  -> Userspace Virt: %p\n", dma_alloc->user_addr);
+    dev_warn(&dev->pdev->dev, "  -> Kernel Virt:    %p\n", dma_alloc->kern_addr);
+    dev_warn(&dev->pdev->dev, "  -> Physical (DMA): %pad\n", &dma_alloc->dma_addr);
+
     // Add the allocation to the driver's list of DMA buffers
     list_add(&dma_alloc->list, &dev->dmabuf_list);
     return 0;
@@ -321,6 +489,7 @@ free_vma_data:
 ret:
     return rc;
 }
+#endif
 
 /* Verifies that the pointer can be read and/or written to with the given size.
  * The user specifies the mode, either readonly, or not (read-write). */
