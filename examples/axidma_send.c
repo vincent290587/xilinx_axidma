@@ -79,7 +79,6 @@ static int parse_args(int argc, char **argv, char **input_path,
 {
     char option;
     int int_arg;
-    double double_arg;
     bool o_specified, s_specified;
     int rc;
 
@@ -151,8 +150,7 @@ static int parse_args(int argc, char **argv, char **input_path,
  * DMA File Transfer Functions
  *----------------------------------------------------------------------------*/
 
-static int transfer_file(axidma_dev_t dev, struct dma_transfer *trans,
-                         char *output_path)
+static int transfer_file(axidma_dev_t dev, struct dma_transfer *trans)
 {
     int rc;
 
@@ -167,7 +165,8 @@ static int transfer_file(axidma_dev_t dev, struct dma_transfer *trans,
     if (rc < 0) {
         perror("Unable to read in input buffer.\n");
         axidma_free(dev, trans->input_buf, trans->input_size);
-        return rc;
+        rc = -EIO;
+        goto free_input_buf;
     }
 
     // Perform the transfer
@@ -191,7 +190,7 @@ ret:
 int main(int argc, char **argv)
 {
     int rc;
-    char *input_path, *output_path;
+    char *input_path;
     axidma_dev_t axidma_dev;
     struct stat input_stat;
     struct dma_transfer trans;
@@ -254,12 +253,11 @@ int main(int argc, char **argv)
     printf("\tInput File Size: %.2f MiB\n", BYTE_TO_MIB(trans.input_size));
 
     // Transfer the file over the AXI DMA
-    rc = transfer_file(axidma_dev, &trans, output_path);
+    rc = transfer_file(axidma_dev, &trans);
     rc = (rc < 0) ? -rc : 0;
 
 destroy_axidma:
     axidma_destroy(axidma_dev);
-close_input:
     assert(close(trans.input_fd) == 0);
 ret:
     return rc;
