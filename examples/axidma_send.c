@@ -79,13 +79,10 @@ static int parse_args(int argc, char **argv, char **input_path,
 {
     char option;
     int int_arg;
-    bool o_specified, s_specified;
     int rc;
 
     // Set the default values for the arguments
     *input_channel = -1;
-    o_specified = false;
-    s_specified = false;
     rc = 0;
 
     while ((option = getopt(argc, argv, "t:r:s:o:h")) != (char)-1)
@@ -116,13 +113,6 @@ static int parse_args(int argc, char **argv, char **input_path,
     if ((*input_channel == -1)) {
         fprintf(stderr, "Error: Either both -t and -r must be specified, or "
                 "neither.\n");
-        print_usage(false);
-        return -EINVAL;
-    }
-
-    // Only one of -s and -o can be specified
-    if (s_specified && o_specified) {
-        fprintf(stderr, "Error: Only one of -s and -o can be specified.\n");
         print_usage(false);
         return -EINVAL;
     }
@@ -194,7 +184,7 @@ int main(int argc, char **argv)
     axidma_dev_t axidma_dev;
     struct stat input_stat;
     struct dma_transfer trans;
-    const array_t *tx_chans, *rx_chans;
+    const array_t *tx_chans;
 
     // Parse the input arguments
     memset(&trans, 0, sizeof(trans));
@@ -233,12 +223,6 @@ int main(int argc, char **argv)
     tx_chans = axidma_get_dma_tx(axidma_dev);
     if (tx_chans->len < 1) {
         fprintf(stderr, "Error: No transmit channels were found.\n");
-        rc = -ENODEV;
-        goto destroy_axidma;
-    }
-    rx_chans = axidma_get_dma_rx(axidma_dev);
-    if (rx_chans->len < 1) {
-        fprintf(stderr, "Error: No receive channels were found.\n");
         rc = -ENODEV;
         goto destroy_axidma;
     }
