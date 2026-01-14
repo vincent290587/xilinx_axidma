@@ -111,6 +111,7 @@ static int axidma_of_parse_channel(struct device_node *dma_node, int channel,
                         "'xlnx,device-id' property.\n");
         return -EINVAL;
     }
+
     rc = of_property_read_u32(dma_chan_node, "xlnx,device-id", &channel_id);
     if (rc < 0) {
         axidma_err("Unable to read the 'xlnx,device-id' property.\n");
@@ -217,6 +218,14 @@ int axidma_of_parse_dma_nodes(struct platform_device *pdev,
     dev->num_dma_rx_chans = 0;
     dev->num_vdma_tx_chans = 0;
     dev->num_vdma_rx_chans = 0;
+
+    rc = of_property_read_u32(driver_node, "index", &dev->chrdev_index);
+
+    if (rc < 0) {
+        if (rc != -EINVAL)
+            axidma_node_err(driver_node, "Invalid index property, ignoring.\n");
+        dev->chrdev_index = -1;
+    }
 
     /* For each DMA channel specified in the deivce tree, parse out the
      * information about the channel, namely its direction and type. */

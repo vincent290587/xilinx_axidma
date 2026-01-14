@@ -10,6 +10,8 @@
  * @bug No known bugs.
  **/
 
+//  Patches in: https://github.com/Digilent/Eclypse-Z7-OS/blob/zmod_dac/master/project-spec/meta-user/recipes-kernel/linux/linux-xlnx/0003-xlnx_axidma-import-updates.patch
+
 // Kernel dependencies
 #include <linux/list.h>         // Linked list definitions and functions
 #include <linux/sched.h>        // `Current` global variable for current task
@@ -30,12 +32,11 @@
 #include "axidma.h"             // Local definitions
 #include "axidma_ioctl.h"       // IOCTL interface for the device
 
+MODULE_IMPORT_NS(DMA_BUF);
+
 /*----------------------------------------------------------------------------
  * Internal Definitions
  *----------------------------------------------------------------------------*/
-
-// TODO: Maybe this can be improved?
-static struct axidma_device *axidma_dev;
 
 // A structure that represents a DMA buffer allocation
 struct axidma_dma_allocation {
@@ -44,6 +45,7 @@ struct axidma_dma_allocation {
     void *kern_addr;            // Kernel virtual address of the buffer
     dma_addr_t dma_addr;        // DMA bus address of the buffer
     struct list_head list;      // List node pointers for allocation list
+    struct device *device;                  // Device structure for the char device
 };
 
 /* A structure that represents a DMA buffer allocation imported from another
@@ -205,13 +207,11 @@ static int axidma_put_external(struct axidma_device *dev, void *user_addr)
 
 static void axidma_vma_close(struct vm_area_struct *vma)
 {
-    struct axidma_device *dev;
     struct axidma_dma_allocation *dma_alloc;
 
     // Get the AXI DMA allocation data and free the DMA buffer
-    dev = axidma_dev;
     dma_alloc = vma->vm_private_data;
-    dma_free_coherent(&dev->pdev->dev, dma_alloc->size, dma_alloc->kern_addr,
+    dma_free_coherent(dma_alloc->device, dma_alloc->size, dma_alloc->kern_addr,
                       dma_alloc->dma_addr);
 
     // Remove the allocation from the list, and free the structure
@@ -242,7 +242,7 @@ static int axidma_open(struct inode *inode, struct file *file)
     }
 
     // Place the axidma structure in the private data of the file
-    file->private_data = (void *)axidma_dev;
+    file->private_data = container_of(inode->i_cdev, struct axidma_device, chrdev);
     return 0;
 }
 
@@ -272,9 +272,10 @@ static int axidma_mmap(struct file *file, struct vm_area_struct *vma)
     // Set the user virtual address and the size
     dma_alloc->size = vma->vm_end - vma->vm_start;
     dma_alloc->user_addr = (void *)vma->vm_start;
+    dma_alloc->device = &dev->pdev->dev;
 
     // Configure the DMA device
-    of_dma_configure(dev->device, NULL);
+    of_dma_configure(&dev->pdev->dev, dev->device->of_node, true);
 
     // Allocate the requested region a contiguous and uncached for DMA
     dma_alloc->kern_addr = dma_alloc_coherent(&dev->pdev->dev, dma_alloc->size,
@@ -306,7 +307,7 @@ static int axidma_mmap(struct file *file, struct vm_area_struct *vma)
     // Do not copy this memory region if this process is forked.
     /* TODO: Figure out the proper way to actually handle multiple processes
      * referring to the DMA buffer. */
-    vma->vm_flags |= VM_DONTCOPY;
+    //vma->vm_flags |= VM_DONTCOPY;
 
     // Add the allocation to the driver's list of DMA buffers
     list_add(&dma_alloc->list, &dev->dmabuf_list);
@@ -326,11 +327,11 @@ ret:
 static bool axidma_access_ok(const void __user *arg, size_t size, bool readonly)
 {
     // Note that VERIFY_WRITE implies VERIFY_WRITE, so read-write is handled
-    if (!readonly && !access_ok(VERIFY_WRITE, arg, size)) {
+    if (!readonly && !access_ok(arg, size)) {
         axidma_err("Argument address %p, size %zu cannot be written to.\n",
                    arg, size);
         return false;
-    } else if (!access_ok(VERIFY_READ, arg, size)) {
+    } else if (!access_ok(arg, size)) {
         axidma_err("Argument address %p, size %zu cannot be read from.\n",
                    arg, size);
         return false;
@@ -347,10 +348,12 @@ static long axidma_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
     struct axidma_device *dev;
     struct axidma_num_channels num_chans;
     struct axidma_channel_info usr_chans, kern_chans;
+    struct axidma_signal_info sig_info;
     struct axidma_register_buffer ext_buf;
     struct axidma_transaction trans;
     struct axidma_inout_transaction inout_trans;
     struct axidma_video_transaction video_trans, *__user user_video_trans;
+    struct axidma_residue residue;
     struct axidma_chan chan_info;
 
     // Coerce the arguement as a userspace pointer
@@ -412,7 +415,12 @@ static long axidma_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
             break;
 
         case AXIDMA_SET_DMA_SIGNAL:
-            rc = axidma_set_signal(dev, arg);
+            if (copy_from_user(&sig_info, arg_ptr, sizeof(sig_info)) != 0) {
+                axidma_err("Unable to copy signal info from userspace for "
+                    "AXIDMA_SET_DMA_SIGNAL.\n");
+                return -EFAULT;
+            }
+            rc = axidma_set_signal(dev, sig_info.signal, sig_info.user_data);
             break;
 
         case AXIDMA_REGISTER_BUFFER:
@@ -514,6 +522,20 @@ static long axidma_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
             kfree(video_trans.frame_buffers);
             break;
 
+        case AXIDMA_DMA_RESIDUE:
+            if (copy_from_user(&residue, arg_ptr, sizeof(residue)) != 0) {
+                axidma_err("Unable to copy residue info from userspace for "
+                           "AXIDMA_DMA_RESIDUE.\n");
+                return -EFAULT;
+            }
+            rc = axidma_get_residue(dev, &residue);
+            if (copy_to_user(arg_ptr, &residue, sizeof(residue)) != 0) {
+                axidma_err("Unable to copy residue info to userspace for "
+                           "AXIDMA_DMA_RESIDUE.\n");
+                return -EFAULT;
+            }
+            break;
+
         case AXIDMA_STOP_DMA_CHANNEL:
             if (copy_from_user(&chan_info, arg_ptr, sizeof(chan_info)) != 0) {
                 axidma_err("Unable to channel info from userspace for "
@@ -551,9 +573,6 @@ int axidma_chrdev_init(struct axidma_device *dev)
 {
     int rc;
 
-    // Store a global pointer to the axidma device
-    axidma_dev = dev;
-
     // Allocate a major and minor number region for the character device
     rc = alloc_chrdev_region(&dev->dev_num, dev->minor_num, dev->num_devices,
                              dev->chrdev_name);
@@ -563,7 +582,7 @@ int axidma_chrdev_init(struct axidma_device *dev)
     }
 
     // Create a device class for our device
-    dev->dev_class = class_create(THIS_MODULE, dev->chrdev_name);
+    dev->dev_class = class_create(dev->chrdev_name);
     if (IS_ERR(dev->dev_class)) {
         axidma_err("Unable to create a device class.\n");
         rc = PTR_ERR(dev->dev_class);

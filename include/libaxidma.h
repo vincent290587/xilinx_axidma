@@ -60,6 +60,19 @@ typedef void (*axidma_cb_t)(int channel_id, void *data);
 struct axidma_dev *axidma_init();
 
 /**
+ * Initializes a AXI DMA device, returning a handle to the device.
+ *
+ * There is only one AXI DMA device per DMA, since it represents all of the
+ * available channels. Thus, this function should only be invoked once for every
+ * DMA, unless a call has been made to #axidma_destroy. Otherwise, this function
+ * will abort.
+ *
+ * @param[in] index The index of the device, specified in the device tree.
+ * @return A handle to the AXI DMA device on success, NULL on failure.
+ **/
+struct axidma_dev *axidma_init_dev(unsigned int index);
+
+/**
  * Tears down and destroys an AXI DMA device, deallocating its resources.
  *
  * @param[in] dev An #axidma_dev_t returned by #axidma_init.

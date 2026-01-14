@@ -58,6 +58,7 @@ struct axidma_transfer {
     enum axidma_type type;          // The type of the transfer (VDMA/DMA)
     int channel_id;                 // The ID of the channel
     int notify_signal;              // The signal to use for async transfers
+    void *user_data;                // User data to be passed in the callback
     struct task_struct *process;    // The process requesting the transfer
     struct axidma_cb_data *cb_data; // The callback data struct
 
@@ -71,6 +72,7 @@ struct axidma_transfer {
 struct axidma_cb_data {
     int channel_id;                 // The id of the channel used
     int notify_signal;              // For async, signal to send
+    void *user_data;                // User data to be passed in the callback
     struct task_struct *process;    // The process to send the signal to
     struct completion *comp;        // For sync, the notification to kernel
 };
@@ -143,7 +145,7 @@ static struct axidma_chan *axidma_get_chan(struct axidma_device *dev,
 static void axidma_dma_callback(void *data)
 {
     struct axidma_cb_data *cb_data;
-    struct siginfo sig_info;
+    struct kernel_siginfo sig_info;
 
     /* For synchronous transfers, notify the kernel thread waiting. For
      * asynchronous transfers, send a signal to userspace if requested. */
@@ -151,10 +153,12 @@ static void axidma_dma_callback(void *data)
     if (cb_data->comp != NULL) {
         complete(cb_data->comp);
     } else if (VALID_NOTIFY_SIGNAL(cb_data->notify_signal)) {
-        memset(&sig_info, 0, sizeof(sig_info));
+        clear_siginfo(&sig_info);
         sig_info.si_signo = cb_data->notify_signal;
         sig_info.si_code = SI_QUEUE;
-        sig_info.si_int = cb_data->channel_id;
+        //sig_info.si_int = cb_data->channel_id;
+        sig_info.si_errno = cb_data->channel_id;    //This shouldn't be here
+        sig_info.si_ptr = cb_data->user_data;
         send_sig_info(cb_data->notify_signal, &sig_info, cb_data->process);
     }
 }
@@ -241,6 +245,7 @@ static int axidma_prep_transfer(struct axidma_chan *axidma_chan,
     /* If we're going to wait for this channel, initialize the completion for
      * the channel, and setup the callback to complete it. */
     cb_data->channel_id = dma_tfr->channel_id;
+    cb_data->user_data = dma_tfr->user_data;
     if (dma_tfr->wait) {
         cb_data->comp = dma_comp;
         cb_data->notify_signal = -1;
@@ -338,7 +343,7 @@ void axidma_get_channel_info(struct axidma_device *dev,
     return;
 }
 
-int axidma_set_signal(struct axidma_device *dev, int signal)
+int axidma_set_signal(struct axidma_device *dev, int signal, void *user_data)
 {
     // Verify the signal is a real-time one
     if (!VALID_NOTIFY_SIGNAL(signal)) {
@@ -349,6 +354,7 @@ int axidma_set_signal(struct axidma_device *dev, int signal)
     }
 
     dev->notify_signal = signal;
+    dev->user_data = user_data;
     return 0;
 }
 
@@ -384,6 +390,7 @@ int axidma_read_transfer(struct axidma_device *dev,
     rx_tfr.wait = trans->wait;
     rx_tfr.channel_id = trans->channel_id;
     rx_tfr.notify_signal = dev->notify_signal;
+    rx_tfr.user_data = dev->user_data;
     rx_tfr.process = get_current();
     rx_tfr.cb_data = &dev->cb_data[trans->channel_id];
 
@@ -434,6 +441,7 @@ int axidma_write_transfer(struct axidma_device *dev,
     tx_tfr.wait = trans->wait;
     tx_tfr.channel_id = trans->channel_id;
     tx_tfr.notify_signal = dev->notify_signal;
+    tx_tfr.user_data = dev->user_data;
     tx_tfr.process = get_current();
     tx_tfr.cb_data = &dev->cb_data[trans->channel_id];
 
@@ -499,6 +507,7 @@ int axidma_rw_transfer(struct axidma_device *dev,
     tx_tfr.wait = false,
     tx_tfr.channel_id = trans->tx_channel_id,
     tx_tfr.notify_signal = dev->notify_signal,
+    tx_tfr.user_data = dev->user_data,
     tx_tfr.process = get_current(),
     tx_tfr.cb_data = &dev->cb_data[trans->tx_channel_id];
 
@@ -514,6 +523,7 @@ int axidma_rw_transfer(struct axidma_device *dev,
     rx_tfr.wait = trans->wait,
     rx_tfr.channel_id = trans->rx_channel_id,
     rx_tfr.notify_signal = dev->notify_signal,
+    rx_tfr.user_data = dev->user_data,
     rx_tfr.process = get_current(),
     rx_tfr.cb_data = &dev->cb_data[trans->rx_channel_id];
 
@@ -562,6 +572,7 @@ int axidma_video_transfer(struct axidma_device *dev,
         .wait = false,
         .channel_id = trans->channel_id,
         .notify_signal = dev->notify_signal,
+        .user_data = dev->user_data,
         .process = get_current(),
         .frame = trans->frame,
     };
@@ -587,8 +598,7 @@ int axidma_video_transfer(struct axidma_device *dev,
 
     // Get the channel with the given id
     chan = axidma_get_chan(dev, trans->channel_id);
-    if (chan == NULL && chan->dir != dir &&
-            chan->type != AXIDMA_VDMA) {
+    if (chan == NULL || chan->dir != dir || chan->type != AXIDMA_VDMA) {
         axidma_err("Invalid device id %d for VDMA %s channel.\n",
                    trans->channel_id, axidma_dir_to_string(chan->dir));
         rc = -ENODEV;
@@ -611,6 +621,23 @@ ret:
     return 0;
 }
 
+int axidma_get_residue(struct axidma_device *dev, struct axidma_residue *res)
+{
+    struct axidma_chan *chan;
+    struct dma_tx_state state;
+
+    chan = axidma_get_chan(dev, res->channel_id);
+
+    if (chan != NULL) {
+        dmaengine_tx_status(chan->chan, chan->chan->cookie, &state);
+        res->residue = state.residue;
+
+        return 0;
+    }
+    
+    return -ENODEV;
+}
+
 int axidma_stop_channel(struct axidma_device *dev,
                         struct axidma_chan *chan_info)
 {
@@ -618,7 +645,7 @@ int axidma_stop_channel(struct axidma_device *dev,
 
     // Get the transmit and receive channels with the given ids.
     chan = axidma_get_chan(dev, chan_info->channel_id);
-    if (chan == NULL && chan->type != chan_info->type &&
+    if (chan == NULL || chan->type != chan_info->type ||
             chan->dir != chan_info->dir) {
         axidma_err("Invalid channel id %d for %s %s channel.\n",
             chan_info->channel_id, axidma_type_to_string(chan_info->type),
@@ -646,10 +673,11 @@ static int axidma_request_channels(struct platform_device *pdev,
     for (i = 0; i < dev->num_chans; i++)
     {
         chan = &dev->channels[i];
-        chan->chan = dma_request_slave_channel(&pdev->dev, chan->name);
-        if (chan->chan == NULL) {
-            axidma_err("Unable to get slave channel %d: %s.\n", i, chan->name);
-            rc = -ENODEV;
+        chan->chan = dma_request_chan(&pdev->dev, chan->name);
+        if (IS_ERR(chan->chan)) {
+            rc = PTR_ERR(chan->chan);
+            axidma_err("Unable to get slave channel %d (%s): %d\n", i, chan->name, rc);
+            chan->chan = NULL; // Ensure it's NULL for the release loop logic
             goto release_channels;
         }
         num_reserved_chans += 1;
