@@ -52,9 +52,6 @@ struct axidma_dev {
     dma_channel_t *channels;    ///< All of the VDMA/DMA channels in the system
 };
 
-// The DMA device structure, and a boolean checking if it's already open
-struct axidma_dev axidma_dev = {0};
-
 /*----------------------------------------------------------------------------
  * Private Helper Functions
  *----------------------------------------------------------------------------*/
@@ -185,55 +182,6 @@ static int probe_channels(axidma_dev_t dev)
     return rc;
 }
 
-static void axidma_callback(int signal, siginfo_t *siginfo, void *context)
-{
-    int channel_id;
-    dma_channel_t *chan;
-
-    assert(0 <= siginfo->si_int && siginfo->si_int < axidma_dev.num_channels);
-
-    // Silence the compiler
-    (void)signal;
-    (void)context;
-
-    // If the user defined a callback for a given channel, invoke it
-    channel_id = siginfo->si_int;
-    chan = &axidma_dev.channels[channel_id];
-    if (chan->callback != NULL) {
-        chan->callback(channel_id, chan->user_data);
-    }
-
-    return;
-}
-
-/* Sets up a signal handler for the lowest real-time signal to be delivered
- * whenever any asynchronous DMA transaction compeletes. */
-// TODO: Should really check if real time signal is being used
-static int setup_dma_callback(axidma_dev_t dev)
-{
-    int rc;
-    struct sigaction sigact;
-
-    // Register a signal handler for the real-time signal
-    sigact.sa_sigaction = axidma_callback;
-    sigemptyset(&sigact.sa_mask);
-    sigact.sa_flags = SA_RESTART | SA_SIGINFO;
-    rc = sigaction(SIGRTMIN, &sigact, NULL);
-    if (rc < 0) {
-        perror("Failed to register DMA callback");
-        return rc;
-    }
-
-    // Tell the driver to deliver us SIGRTMIN upon DMA completion
-    rc = ioctl(dev->fd, AXIDMA_SET_DMA_SIGNAL, SIGRTMIN);
-    if (rc < 0) {
-        perror("Failed to set the DMA callback signal");
-        return rc;
-    }
-
-    return 0;
-}
-
 // Finds the DMA channel with the given id
 static dma_channel_t *find_channel(axidma_dev_t dev, int channel_id)
 {
@@ -249,6 +197,60 @@ static dma_channel_t *find_channel(axidma_dev_t dev, int channel_id)
     }
 
     return NULL;
+}
+
+static void axidma_callback(int signal, siginfo_t *siginfo, void *context)
+{
+    struct axidma_dev *dev = (struct axidma_dev *)siginfo->si_ptr;
+    int channel = siginfo->si_errno;
+    dma_channel_t *chan;
+
+    assert(dev != NULL);
+    assert(find_channel(dev, channel) != NULL);
+
+    // Silence the compiler
+    (void)signal;
+    (void)context;
+
+    // If the user defined a callback for a given channel, invoke it
+    chan = &dev->channels[channel];
+    if (chan->callback != NULL) {
+        chan->callback(channel, chan->user_data);
+    }
+
+    return;
+}
+
+/* Sets up a signal handler for the lowest real-time signal to be delivered
+ * whenever any asynchronous DMA transaction compeletes. */
+// TODO: Should really check if real time signal is being used
+static int setup_dma_callback(axidma_dev_t dev)
+{
+    int rc;
+    struct axidma_signal_info sig_info;
+    struct sigaction sigact;
+
+    // Register a signal handler for the real-time signal
+    sigact.sa_sigaction = axidma_callback;
+    sigemptyset(&sigact.sa_mask);
+    sigact.sa_flags = SA_RESTART | SA_SIGINFO;
+    rc = sigaction(SIGRTMIN, &sigact, NULL);
+    if (rc < 0) {
+        perror("Failed to register DMA callback");
+        return rc;
+    }
+
+    sig_info.signal = SIGRTMIN;
+    sig_info.user_data = dev;
+
+    // Tell the driver to deliver us SIGRTMIN upon DMA completion
+    rc = ioctl(dev->fd, AXIDMA_SET_DMA_SIGNAL, &sig_info);
+    if (rc < 0) {
+        perror("Failed to set the DMA callback signal");
+        return rc;
+    }
+
+    return 0;
 }
 
 // Converts the AXI DMA direction to the corresponding ioctl for the transfer
@@ -270,38 +272,56 @@ static unsigned long dir_to_ioctl(enum axidma_dir dir)
  * Public Interface
  *----------------------------------------------------------------------------*/
 
-/* Initializes the AXI DMA device, returning a new handle to the
- * axidma_device. */
 struct axidma_dev *axidma_init()
 {
-    assert(!axidma_dev.initialized);
+    return axidma_init_dev(0);
+}
+
+/* Initializes the AXI DMA device, returning a new handle to the
+ * axidma_device. */
+struct axidma_dev *axidma_init_dev(unsigned int index)
+{
+    const unsigned int pathlen = sizeof(AXIDMA_DEV_PATH) + 10;
+    char path[pathlen];
+    struct axidma_dev *dev;
+
+    dev = (struct axidma_dev *)calloc(1, sizeof(struct axidma_dev));
+    if (dev == NULL) {
+        perror("Can't allocate AXI DMA structure");
+        return NULL;
+    }
 
     // Open the AXI DMA device
-    axidma_dev.fd = open(AXIDMA_DEV_PATH, O_RDWR|O_EXCL);
-    if (axidma_dev.fd < 0) {
+    if (index) {
+        snprintf(path, pathlen, "%s%d", AXIDMA_DEV_PATH, index);
+        dev->fd = open(path, O_RDWR|O_EXCL);
+    }
+    else
+        dev->fd = open(AXIDMA_DEV_PATH, O_RDWR|O_EXCL);
+
+    if (dev->fd < 0) {
         perror("Error opening AXI DMA device");
         fprintf(stderr, "Expected the AXI DMA device at the path `%s`\n",
-                AXIDMA_DEV_PATH);
+                index ? path : AXIDMA_DEV_PATH);
         return NULL;
     }
 
     // Query the AXIDMA device for all of its channels
-    if (probe_channels(&axidma_dev) < 0) {
-        close(axidma_dev.fd);
+    if (probe_channels(dev) < 0) {
+        close(dev->fd);
         return NULL;
     }
 
     // TODO: Should really check that signal is not already taken
     /* Setup a real-time signal to indicate when transactions have completed,
      * and request the driver to send them to us. */
-    if (setup_dma_callback(&axidma_dev) < 0) {
-        close(axidma_dev.fd);
+    if (setup_dma_callback(dev) < 0) {
+        close(dev->fd);
         return NULL;
     }
 
     // Return the AXI DMA device to the user
-    axidma_dev.initialized = true;
-    return &axidma_dev;
+    return dev;
 }
 
 // Tears down the given AXI DMA device structure
@@ -320,8 +340,6 @@ void axidma_destroy(axidma_dev_t dev)
         assert(false);
     }
 
-    // Free the device structure
-    axidma_dev.initialized = false;
     return;
 }
 
