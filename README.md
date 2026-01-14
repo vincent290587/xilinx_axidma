@@ -71,7 +71,7 @@ axi_dma_0: axidma0@40400000 {
         compatible = "xlnx,axi-dma-mm2s-channel";
         dma-channels = <1>;
         xlnx,datawidth = <64>;
-        xlnx,device-id = <0>;
+        xlnx,device-id = <0>;    <----
         interrupt-parent = <&intc>;
         interrupts = <0 29 4>;
     };
@@ -80,7 +80,7 @@ axi_dma_0: axidma0@40400000 {
         compatible = "xlnx,axi-dma-s2mm-channel";
         dma-channels = <1>;
         xlnx,datawidth = <64>;
-        xlnx,device-id = <1>;
+        xlnx,device-id = <1>;    <----
         interrupt-parent = <&intc>;
         interrupts = <0 30 4>;
     };
