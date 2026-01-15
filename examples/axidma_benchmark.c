@@ -48,7 +48,7 @@
  * Internal Definitons
  *----------------------------------------------------------------------------*/
 
-// The size of data to send per transfer (1080p image, 7.24 MiB)
+// The size of data to send per transfer (1080p image, 7.91 MiB)
 #define IMAGE_SIZE                  (1920 * 1080)
 #define DEFAULT_TRANSFER_SIZE       ((int)(IMAGE_SIZE * sizeof(int)))
 
@@ -394,7 +394,7 @@ static int single_transfer_test(axidma_dev_t dev, int tx_channel, void *tx_buf,
 
     // Perform the DMA transaction
     rc = axidma_twoway_transfer(dev, tx_channel, tx_buf, tx_size, tx_frame,
-            rx_channel, rx_buf, rx_size, rx_frame, true);
+            rx_channel, rx_buf, rx_size, rx_frame, 10000);
     if (rc < 0) {
         return rc;
     }
@@ -424,7 +424,7 @@ static int time_dma(axidma_dev_t dev, int tx_channel, void *tx_buf, int tx_size,
     for (i = 0; i < num_transfers; i++)
     {
         rc = axidma_twoway_transfer(dev, tx_channel, tx_buf, tx_size, tx_frame,
-                rx_channel, rx_buf, rx_size, rx_frame, true);
+                rx_channel, rx_buf, rx_size, rx_frame, 10000);
         if (rc < 0) {
             fprintf(stderr, "DMA failed on transfer %d, not reporting timing "
                     "results.\n", i+1);
@@ -549,7 +549,7 @@ int main(int argc, char **argv)
     }
     printf("Single transfer test successfully completed!\n");
 
-    // Time the DMA eingine
+    // Time the DMA engine
     printf("Beginning performance analysis of the DMA engine.\n\n");
     rc = time_dma(axidma_dev, tx_channel, tx_buf, tx_size, tx_frame,
             rx_channel, rx_buf, rx_size, rx_frame, num_transfers);

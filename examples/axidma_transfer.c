@@ -234,7 +234,7 @@ static int transfer_file(axidma_dev_t dev, struct dma_transfer *trans,
     // Perform the main transaction
     rc = axidma_twoway_transfer(dev, trans->input_channel, trans->input_buf,
             trans->input_size, NULL, trans->output_channel, trans->output_buf,
-            trans->output_size, NULL, true);
+            trans->output_size, NULL, 10000);
     if (rc < 0) {
         fprintf(stderr, "DMA read write transaction failed.\n");
         goto free_output_buf;

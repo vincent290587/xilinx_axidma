@@ -100,7 +100,7 @@ struct axidma_register_buffer {
 };
 
 struct axidma_transaction {
-    bool wait;                      // Indicates if the call is blocking
+    int wait_ms;                    // Indicates if the call is blocking
     int channel_id;                 // The id of the DMA channel to use
     void *buf;                      // The buffer used for the transaction
     size_t buf_len;                 // The length of the buffer
@@ -112,7 +112,7 @@ struct axidma_transaction {
 };
 
 struct axidma_inout_transaction {
-    bool wait;                      // Indicates if the call is blocking
+    int wait_ms;                      // Indicates if the call is blocking
     int tx_channel_id;              // The id of the transmit DMA channel
     void *tx_buf;                   // The buffer containing the data to send
     size_t tx_buf_len;              // The length of the transmit buffer

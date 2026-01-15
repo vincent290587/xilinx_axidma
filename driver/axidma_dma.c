@@ -44,14 +44,11 @@
  * Internal Definitions
  *----------------------------------------------------------------------------*/
 
-// The default timeout for DMA is 10 seconds
-#define AXIDMA_DMA_TIMEOUT      10000
-
 // A convenient structure to pass between prep and start transfer functions
 struct axidma_transfer {
     int sg_len;                     // The length of the BD array
     struct scatterlist *sg_list;    // List of buffer descriptors
-    bool wait;                      // Indicates if we should wait
+    int wait_ms;                    // Indicates if we should wait
     dma_cookie_t cookie;            // The DMA cookie for the transfer
     struct completion comp;         // A completion to use for waiting
     enum axidma_dir dir;            // The direction of the transfer
@@ -246,7 +243,7 @@ static int axidma_prep_transfer(struct axidma_chan *axidma_chan,
      * the channel, and setup the callback to complete it. */
     cb_data->channel_id = dma_tfr->channel_id;
     cb_data->user_data = dma_tfr->user_data;
-    if (dma_tfr->wait) {
+    if (dma_tfr->wait_ms > 0) {
         cb_data->comp = dma_comp;
         cb_data->notify_signal = -1;
         cb_data->process = NULL;
@@ -297,8 +294,8 @@ static int axidma_start_transfer(struct axidma_chan *chan,
     dma_async_issue_pending(chan->chan);
 
     // Wait for the completion timeout or the DMA to complete
-    if (dma_tfr->wait) {
-        timeout = msecs_to_jiffies(AXIDMA_DMA_TIMEOUT);
+    if (dma_tfr->wait_ms > 0) {
+        timeout = msecs_to_jiffies(dma_tfr->wait_ms);
         time_remain = wait_for_completion_timeout(dma_comp, timeout);
         status = dma_async_is_tx_complete(chan->chan, dma_cookie, NULL, NULL);
 
@@ -387,7 +384,7 @@ int axidma_read_transfer(struct axidma_device *dev,
     rx_tfr.sg_len = 1;
     rx_tfr.dir = rx_chan->dir;
     rx_tfr.type = rx_chan->type;
-    rx_tfr.wait = trans->wait;
+    rx_tfr.wait_ms = trans->wait_ms;
     rx_tfr.channel_id = trans->channel_id;
     rx_tfr.notify_signal = dev->notify_signal;
     rx_tfr.user_data = dev->user_data;
@@ -397,8 +394,10 @@ int axidma_read_transfer(struct axidma_device *dev,
     // Prepare the receive transfer
     rc = axidma_prep_transfer(rx_chan, &rx_tfr);
     if (rc < 0) {
+        axidma_err("Could not prepare RX transfer chan %d", trans->channel_id);
         return rc;
     }
+    axidma_info("RX transfer setup chan %d", trans->channel_id);
 
     // Submit the receive transfer, and wait for it to complete
     rc = axidma_start_transfer(rx_chan, &rx_tfr);
@@ -438,7 +437,7 @@ int axidma_write_transfer(struct axidma_device *dev,
     tx_tfr.sg_len = 1;
     tx_tfr.dir = tx_chan->dir;
     tx_tfr.type = tx_chan->type;
-    tx_tfr.wait = trans->wait;
+    tx_tfr.wait_ms = trans->wait_ms;
     tx_tfr.channel_id = trans->channel_id;
     tx_tfr.notify_signal = dev->notify_signal;
     tx_tfr.user_data = dev->user_data;
@@ -448,8 +447,10 @@ int axidma_write_transfer(struct axidma_device *dev,
     // Prepare the transmit transfer
     rc = axidma_prep_transfer(tx_chan, &tx_tfr);
     if (rc < 0) {
+        axidma_err("Could not prepare TX transfer chan %d", trans->channel_id);
         return rc;
     }
+    axidma_info("TX transfer setup chan %d", trans->channel_id);
 
     // Submit the transmit transfer, and wait for it to complete
     rc = axidma_start_transfer(tx_chan, &tx_tfr);
@@ -499,12 +500,12 @@ int axidma_rw_transfer(struct axidma_device *dev,
         return rc;
     }
 
-    // Setup receive and trasmit transfer structures for DMA
+    // Setup receive and transmit transfer structures for DMA
     tx_tfr.sg_list = &tx_sg_list,
     tx_tfr.sg_len = 1,
     tx_tfr.dir = tx_chan->dir,
     tx_tfr.type = tx_chan->type,
-    tx_tfr.wait = false,
+    tx_tfr.wait_ms = -1,
     tx_tfr.channel_id = trans->tx_channel_id,
     tx_tfr.notify_signal = dev->notify_signal,
     tx_tfr.user_data = dev->user_data,
@@ -520,7 +521,7 @@ int axidma_rw_transfer(struct axidma_device *dev,
     rx_tfr.sg_len = 1,
     rx_tfr.dir = rx_chan->dir,
     rx_tfr.type = rx_chan->type,
-    rx_tfr.wait = trans->wait,
+    rx_tfr.wait_ms = trans->wait_ms,
     rx_tfr.channel_id = trans->rx_channel_id,
     rx_tfr.notify_signal = dev->notify_signal,
     rx_tfr.user_data = dev->user_data,
@@ -569,7 +570,7 @@ int axidma_video_transfer(struct axidma_device *dev,
         .sg_len = trans->num_frame_buffers,
         .dir = dir,
         .type = AXIDMA_VDMA,
-        .wait = false,
+        .wait_ms = -1,
         .channel_id = trans->channel_id,
         .notify_signal = dev->notify_signal,
         .user_data = dev->user_data,

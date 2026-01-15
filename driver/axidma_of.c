@@ -227,7 +227,7 @@ int axidma_of_parse_dma_nodes(struct platform_device *pdev,
         dev->chrdev_index = -1;
     }
 
-    /* For each DMA channel specified in the deivce tree, parse out the
+    /* For each DMA channel specified in the device tree, parse out the
      * information about the channel, namely its direction and type. */
     for (i = 0; i < dev->num_chans; i++)
     {

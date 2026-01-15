@@ -219,12 +219,12 @@ void axidma_set_callback(axidma_dev_t dev, int channel, axidma_cb_t callback,
  * @param[in] buf Address of the DMA buffer to transfer, previously allocated by
  *                #axidma_malloc or registered with #axidma_register_buffer.
  * @param[in] len Number of bytes that will be transfered.
- * @param[in] wait Indicates if the transfer should be synchronous or
- *                 asynchronous. If true, this function will block.
+ * @param[in] wait_ms Indicates if the transfer should be synchronous or
+ *                 asynchronous. If >0, this function will block.
  * @return 0 upon success, a negative number on failure.
  **/
 int axidma_oneway_transfer(axidma_dev_t dev, int channel, void *buf, size_t len,
-        bool wait);
+        int wait_ms);
 
 /**
  * Performs a two coupled DMA transfers, one in the receive direction, the other
@@ -252,14 +252,14 @@ int axidma_oneway_transfer(axidma_dev_t dev, int channel, void *buf, size_t len,
  * @param[in] rx_len Number of bytes to receive into \p rx_buf.
  * @param[in] rx_frame Information about the video frame for the receive
  *                     channel. Should be set to NULL for non-VDMA transfers.
- * @param[in] wait Indicates if the transfer should be synchronous or
- *                 asynchronous. If true, this function will block.
+ * @param[in] wait_ms Indicates if the transfer should be synchronous or
+ *                 asynchronous. If > 0, this function will block.
  * @return 0 upon success, a negative number on failure.
  **/
 int axidma_twoway_transfer(axidma_dev_t dev, int tx_channel, void *tx_buf,
         size_t tx_len, struct axidma_video_frame *tx_frame, int rx_channel,
         void *rx_buf, size_t rx_len, struct axidma_video_frame *rx_frame,
-        bool wait);
+        int wait_ms);
 
 /**
  * Starts a video DMA (VDMA) loop/continuous transfer on the given channel.

@@ -458,7 +458,7 @@ void axidma_unregister_buffer(axidma_dev_t dev, void *user_addr)
 /* This performs a one-way transfer over AXI DMA, the direction being specified
  * by the user. The user determines if this is blocking or not with `wait. */
 int axidma_oneway_transfer(axidma_dev_t dev, int channel, void *buf,
-        size_t len, bool wait)
+        size_t len, int wait_ms)
 {
     int rc;
     struct axidma_transaction trans;
@@ -469,11 +469,14 @@ int axidma_oneway_transfer(axidma_dev_t dev, int channel, void *buf,
 
     // Setup the argument structure to the IOCTL
     dma_chan = find_channel(dev, channel);
-    trans.wait = wait;
+    trans.wait_ms = wait_ms;
     trans.channel_id = channel;
     trans.buf = buf;
     trans.buf_len = len;
     axidma_cmd = dir_to_ioctl(dma_chan->dir);
+
+    fprintf(stdout, "axidma_oneway_transfer: cmd= %d \n",
+                axidma_cmd);
 
     // Perform the given transfer
     rc = ioctl(dev->fd, axidma_cmd, &trans);
@@ -490,7 +493,7 @@ int axidma_oneway_transfer(axidma_dev_t dev, int channel, void *buf,
 int axidma_twoway_transfer(axidma_dev_t dev, int tx_channel, void *tx_buf,
         size_t tx_len, struct axidma_video_frame *tx_frame, int rx_channel,
         void *rx_buf, size_t rx_len, struct axidma_video_frame *rx_frame,
-        bool wait)
+        int wait_ms)
 {
     int rc;
     struct axidma_inout_transaction trans;
@@ -501,7 +504,7 @@ int axidma_twoway_transfer(axidma_dev_t dev, int tx_channel, void *tx_buf,
     assert(find_channel(dev, rx_channel)->dir == AXIDMA_READ);
 
     // Setup the argument structure for the IOCTL
-    trans.wait = wait;
+    trans.wait_ms = wait_ms;
     trans.tx_channel_id = tx_channel;
     trans.tx_buf = tx_buf;
     trans.tx_buf_len = tx_len;
