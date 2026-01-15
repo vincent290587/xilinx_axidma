@@ -109,23 +109,15 @@ static int parse_args(int argc, char **argv, char **input_path,
         }
     }
 
-    // If one of -t or -r is specified, then both must be
-    if ((*input_channel == -1)) {
-        fprintf(stderr, "Error: Either both -t and -r must be specified, or "
-                "neither.\n");
-        print_usage(false);
-        return -EINVAL;
-    }
-
     // Check that there are enough command line arguments
-    if (optind > argc-2) {
+    if (optind < 1) {
         fprintf(stderr, "Error: Too few command line arguments.\n");
         print_usage(false);
         return -EINVAL;
     }
 
     // Check if there are too many command line arguments remaining
-    if (optind < argc-2) {
+    if (optind > 1) {
         fprintf(stderr, "Error: Too many command line arguments.\n");
         print_usage(false);
         return -EINVAL;

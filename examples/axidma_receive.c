@@ -152,14 +152,14 @@ static int parse_args(int argc, char **argv,
     }
 
     // Check that there are enough command line arguments
-    if (optind > argc-2) {
+    if (optind < 1) {
         fprintf(stderr, "Error: Too few command line arguments.\n");
         print_usage(false);
         return -EINVAL;
     }
 
     // Check if there are too many command line arguments remaining
-    if (optind < argc-2) {
+    if (optind > 3) {
         fprintf(stderr, "Error: Too many command line arguments.\n");
         print_usage(false);
         return -EINVAL;
