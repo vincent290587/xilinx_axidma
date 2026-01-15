@@ -368,7 +368,7 @@ int axidma_read_transfer(struct axidma_device *dev,
 
     // Get the channel with the given channel id
     rx_chan = axidma_get_chan(dev, trans->channel_id);
-    if (rx_chan == NULL || rx_chan->dir != AXIDMA_READ) {
+    if (rx_chan == NULL || rx_chan->dir != AXIDMA_READ || rx_chan->channel_id != trans->channel_id) {
         axidma_err("Invalid device id %d for DMA receive channel.\n",
                    trans->channel_id);
         return -ENODEV;
@@ -419,7 +419,7 @@ int axidma_write_transfer(struct axidma_device *dev,
 
     // Get the channel with the given id
     tx_chan = axidma_get_chan(dev, trans->channel_id);
-    if (tx_chan == NULL || tx_chan->dir != AXIDMA_WRITE) {
+    if (tx_chan == NULL || tx_chan->dir != AXIDMA_WRITE || tx_chan->channel_id != trans->channel_id) {
         axidma_err("Invalid device id %d for DMA transmit channel.\n",
                    trans->channel_id);
         return -ENODEV;
