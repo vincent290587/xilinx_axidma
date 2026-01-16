@@ -292,17 +292,13 @@ struct axidma_dev *axidma_init_dev(unsigned int index)
     }
 
     // Open the AXI DMA device
-    if (index) {
-        snprintf(path, pathlen, "%s%d", AXIDMA_DEV_PATH, index);
-        dev->fd = open(path, O_RDWR|O_EXCL);
-    }
-    else
-        dev->fd = open(AXIDMA_DEV_PATH, O_RDWR|O_EXCL);
+    snprintf(path, pathlen, "%s%d", AXIDMA_DEV_PATH, index);
+    dev->fd = open(path, O_RDWR|O_EXCL);
 
     if (dev->fd < 0) {
         perror("Error opening AXI DMA device");
         fprintf(stderr, "Expected the AXI DMA device at the path `%s`\n",
-                index ? path : AXIDMA_DEV_PATH);
+                path);
         return NULL;
     }
 
