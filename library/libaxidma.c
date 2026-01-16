@@ -475,9 +475,6 @@ int axidma_oneway_transfer(axidma_dev_t dev, int channel, void *buf,
     trans.buf_len = len;
     axidma_cmd = dir_to_ioctl(dma_chan->dir);
 
-    fprintf(stdout, "axidma_oneway_transfer: cmd= %d \n",
-                axidma_cmd);
-
     // Perform the given transfer
     rc = ioctl(dev->fd, axidma_cmd, &trans);
     if (rc < 0) {
