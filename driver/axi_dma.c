@@ -35,6 +35,9 @@ module_param(chrdev_name, charp, S_IRUGO);
 static int minor_num = MINOR_NUMBER;
 module_param(minor_num, int, S_IRUGO);
 
+// Add this global counter at the top of your C file
+static int axidma_instance_count = 0;
+
 /*----------------------------------------------------------------------------
  * Platform Device Functions
  *----------------------------------------------------------------------------*/
@@ -43,57 +46,64 @@ static int axidma_probe(struct platform_device *pdev)
 {
     int rc;
     struct axidma_device *axidma_dev;
+    int current_idx;
 
-    // Allocate a AXI DMA device structure to hold metadata about the DMA
-    axidma_dev = kmalloc(sizeof(*axidma_dev), GFP_KERNEL);
+    // Use the global counter to assign a unique index for this probe call
+    current_idx = axidma_instance_count++;
+
+    // Allocate the AXI DMA device structure
+    // Use kzalloc to ensure all fields (especially strings) start at NULL
+    axidma_dev = kzalloc(sizeof(*axidma_dev), GFP_KERNEL);
     if (axidma_dev == NULL) {
         axidma_err("Unable to allocate the AXI DMA device structure.\n");
         return -ENOMEM;
     }
-    axidma_dev->pdev = pdev;
 
-    // Initialize the DMA interface
+    axidma_dev->pdev = pdev;
+    axidma_dev->chrdev_index = current_idx; // Store the unique index
+
+    // Initialize the DMA interface (requests channels from Device Tree)
     rc = axidma_dma_init(pdev, axidma_dev);
     if (rc < 0) {
+        axidma_err("DMA initialization failed for instance %d\n", current_idx);
         rc = -ENOSYS;
         goto free_axidma_dev;
     }
 
-    // Assign the character device name, minor number, and number of devices
-    axidma_dev->minor_num = minor_num;
-    axidma_dev->num_devices = NUM_DEVICES;
+    // Assign the character device name and minor number
+    // We increment the minor number by the index to keep them unique
+    axidma_dev->minor_num = minor_num + current_idx;
+    axidma_dev->num_devices = 1; // Each probe call handles 1 physical instance
 
-    if (axidma_dev->chrdev_index > 0) {
-        rc = strlen(chrdev_name) + 10;
-        axidma_dev->chrdev_name = kmalloc(rc * sizeof(char), GFP_KERNEL);
-
-        if (axidma_dev->chrdev_name == NULL) {
-            axidma_err("Unable to allocate the AXI DMA chardev name string.\n");
-            rc = -ENOMEM;
-            goto free_axidma_dev;
-        }
-
-        snprintf(axidma_dev->chrdev_name, rc, "%s%d", chrdev_name,
-                 axidma_dev->chrdev_index);
-    }
-    else {
-        axidma_dev->chrdev_name = chrdev_name;
+    // Create a unique name: "axidma0", "axidma1", etc.
+    // We allocate space for the base name + digits
+    rc = strlen(chrdev_name) + 10;
+    axidma_dev->chrdev_name = kmalloc(rc, GFP_KERNEL);
+    if (axidma_dev->chrdev_name == NULL) {
+        axidma_err("Unable to allocate the AXI DMA chardev name string.\n");
+        rc = -ENOMEM;
+        goto destroy_dma_dev;
     }
 
-    // Initialize the character device for the module.
+    // Format the name with the unique index
+    snprintf(axidma_dev->chrdev_name, rc, "%s%d", chrdev_name, current_idx);
+    axidma_info("Probing AXI DMA instance %d as %s\n", current_idx, axidma_dev->chrdev_name);
+
+    // Initialize the character device (registers /dev/axidmaX)
     rc = axidma_chrdev_init(axidma_dev);
     if (rc < 0) {
+        axidma_err("Character device init failed for %s\n", axidma_dev->chrdev_name);
         rc = -ENOSYS;
         goto destroy_dma_dev;
     }
 
-    // Set the private data in the device to the AXI DMA device structure
+    // Set the private data
     dev_set_drvdata(&pdev->dev, axidma_dev);
     return 0;
 
 destroy_dma_dev:
     axidma_dma_exit(axidma_dev);
-    if (axidma_dev->chrdev_index > 0)
+    if (axidma_dev->chrdev_name != chrdev_name) // Only free if we allocated it
         kfree(axidma_dev->chrdev_name);
 free_axidma_dev:
     kfree(axidma_dev);
